@@ -10,6 +10,8 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -35,13 +37,13 @@ public class KafkaConsumerService {
 
             // 解析内层 message 字段
             ClickLog clickLog = objectMapper.readValue(rawMessage, ClickLog.class);
-            String timestamp = clickLog.getTimestamp();
+            //String timestamp = clickLog.getTimestamp();
             String userId = clickLog.getUser_id();
             List<ClickHistory> clickHistoryList = clickLog.getClick_history();
             Impression impression = clickLog.getImpression();
 
             // 异步处理点击和曝光
-            handleClickAndExpose(clickHistoryList, impression, timestamp, userId);
+            handleClickAndExpose(clickHistoryList, impression, userId);
 
             // 用户行为快照
             String redisKey = "user:click:" + userId;
@@ -63,7 +65,7 @@ public class KafkaConsumerService {
     }
 
     @Async
-    public void handleClickAndExpose(List<ClickHistory> clickHistoryList, Impression impression, String timestamp, String userId) {
+    public void handleClickAndExpose(List<ClickHistory> clickHistoryList, Impression impression, String userId) {
         try {
             Set<String> newsIdSet = new HashSet<>();
             for (ClickHistory ch : clickHistoryList) newsIdSet.add(ch.getNews_id());
@@ -73,40 +75,82 @@ public class KafkaConsumerService {
             Map<String, News> newsMap = newsRepository.findAllById(newsIdSet).stream()
                     .collect(Collectors.toMap(News::getNewsId, n -> n));
 
+            DateTimeFormatter inputFormatter = DateTimeFormatter.ofPattern("M/d/yyyy h:mm:ss a", Locale.US);
+            DateTimeFormatter outputFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH");
+
             // 点击量（代表用户真实兴趣行为）
             for (ClickHistory clickHistory : clickHistoryList) {
                 String newsId = clickHistory.getNews_id();
                 int dwell = clickHistory.getDwell();
-                String day = timestamp.substring(0, 10);
-                News news = newsMap.get(newsId);
+                String exposeTimeStr = clickHistory.getExposureTime();
+                if (exposeTimeStr == null || exposeTimeStr.isEmpty()) continue;
+                LocalDateTime parsedTime = LocalDateTime.parse(exposeTimeStr, inputFormatter);
+                String exposeTime = parsedTime.format(outputFormatter);
+                String day = exposeTime.substring(0, 10);
 
+                News news = newsMap.get(newsId);
+                if (news == null) continue;
+
+                // topic 推荐构建（基于点击新闻的 topic）
+                String topic = news.getTopic();
+                if (topic != null && !topic.isEmpty()) {
+                    // 查找同 topic 的新闻（排除自身）
+                    List<News> sameTopicNews = newsRepository.findByTopic(topic).stream()
+                            .filter(n -> !n.getNewsId().equals(newsId))
+                            .limit(10)  // 最多加 10 条，避免过多膨胀
+                            .toList();
+
+                    for (News related : sameTopicNews) {
+                        stringRedisTemplate.opsForZSet()
+                                .incrementScore("user:interest:related:" + newsId, related.getNewsId(), 1.0);
+                    }
+                }
+                // 记录新闻第一次点击时间
+                String recordKey = "news:time:record:" + newsId;
+                if (!Boolean.TRUE.equals(stringRedisTemplate.hasKey(recordKey))) {
+                    stringRedisTemplate.opsForValue().set(recordKey, exposeTime);
+                }
+                // 提前维护每条新闻的曝光时间戳
+                stringRedisTemplate.opsForValue().setIfAbsent("news:time:record:" + newsId, exposeTime.substring(0, 13));
+                // 记录新闻最后一次点击时间
+                String latestKey = "news:time:latest:" + newsId;
+                stringRedisTemplate.opsForValue().set(latestKey, exposeTime);
                 // 点击总数递增
                 stringRedisTemplate.opsForValue().increment("news:click:" + newsId);
                 // 爆款新闻点击量统计（2.5判断爆款新闻（热点排名））
                 stringRedisTemplate.opsForZSet().incrementScore("news:rank:click", newsId, 1);
-                // System.out.println(timestamp.substring(0, 13));
                 // 统计每小时点击量(2.1单条新闻的生命周期查询)
-                stringRedisTemplate.opsForZSet().incrementScore("news:time:click:" + timestamp.substring(0, 13), newsId, 1);
+                stringRedisTemplate.opsForZSet().incrementScore("news:time:click:" + exposeTime.substring(0, 13), newsId, 1);
                 // 停留时间总量
                 stringRedisTemplate.opsForValue().increment("news:dwell:" + newsId, dwell);
                 // 某类新闻(2.2某类新闻变化趋势）
                 stringRedisTemplate.opsForZSet().incrementScore("category:click:" + day, news.getCategory(), 1);
                 // 总兴趣(2.3)
-                stringRedisTemplate.opsForZSet().incrementScore("user:interest:" + userId, newsId, 1);
+                // stringRedisTemplate.opsForZSet().incrementScore("user:interest:" + userId, newsId, 1);
                 // 每日兴趣快照(2.3)
                 stringRedisTemplate.opsForZSet().incrementScore("user:interest:" + userId + ":" + day, newsId, 1);
+                // 基于停留时间进行推荐(2.6)
+                stringRedisTemplate.opsForZSet().incrementScore("user:interest:" + userId, newsId, Math.log(dwell + 1));
+
+
             }
 
             // 曝光量（代表该类别下新闻的整体被推荐/展示频率）
             for (Clicked clicked : impression.getClicked()) {
                 String newsId = clicked.getNews_id();
-                String day = timestamp.substring(0, 10);
-                News news = newsMap.get(newsId);
+                String startStr = impression.getStart();
 
+                if (startStr == null || startStr.isEmpty()) continue;
+                LocalDateTime parsedStart = LocalDateTime.parse(startStr, inputFormatter);
+                String start = parsedStart.format(outputFormatter);
+                String day = start.substring(0, 10);
+
+                News news = newsMap.get(newsId);
+                if (news == null) continue;
                 // 曝光总数统计
                 stringRedisTemplate.opsForValue().increment("news:expose:" + newsId);
                 // 每小时曝光量(2.1单条新闻的生命周期查询)
-                stringRedisTemplate.opsForZSet().incrementScore("news:time:expose:" + timestamp.substring(0, 13), newsId, 1);
+                stringRedisTemplate.opsForZSet().incrementScore("news:time:expose:" + start.substring(0, 13), newsId, 1);
                 // 每日曝光类别统计(2.2类别新闻变化统计)
                 stringRedisTemplate.opsForZSet().incrementScore("category:expose:" + day, news.getCategory(), 1);
             }

@@ -1,14 +1,18 @@
 package com.example.demo.Service;
 
 
+import com.example.demo.Model.News;
+import com.example.demo.Repository.NewsRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -16,6 +20,7 @@ public class NewsService {
 
     private final StringRedisTemplate redisTemplate;
     private final AIService aiService;
+    private final NewsRepository newsRepository;
 
     // 获取某条新闻的生命周期：点击+曝光按小时
     public Map<String, Map<String, Long>> getNewsLifecycleRange(String newsId, String startDate, String endDate) {
@@ -97,6 +102,48 @@ public class NewsService {
 
         return totalInterest;
     }
+
+    // 组合查询
+    public List<News> queryByConditionsOptimized(
+            List<String> userIds, String startDate, String endDate,
+            String topic, Integer minLength, Integer maxLength,
+            Integer minHeadlineLength, Integer maxHeadlineLength
+    ) {
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+        LocalDate start = (startDate != null) ? LocalDate.parse(startDate, formatter) : null;
+        LocalDate end = (endDate != null) ? LocalDate.parse(endDate, formatter) : null;
+
+        Set<String> newsIds = new HashSet<>();
+
+        if (userIds != null && !userIds.isEmpty()) {
+            for (String userId : userIds) {
+                for (LocalDate date = start; !date.isAfter(end); date = date.plusDays(1)) {
+                    String key = "user:interest:" + userId + ":" + date.format(formatter);
+                    Set<String> ids = redisTemplate.opsForZSet().range(key, 0, -1);
+                    if (ids != null) newsIds.addAll(ids);
+                }
+            }
+        } else {
+            // 查询所有新闻 ID 从 Redis 判断时间
+            List<News> allNews = newsRepository.findAll();
+            for (News news : allNews) {
+                String record = redisTemplate.opsForValue().get("news:time:record:" + news.getNewsId());
+                if (record == null || record.length() < 10) continue;
+                LocalDate recordDate = LocalDate.parse(record.substring(0, 10), formatter);
+                if (start != null && recordDate.isBefore(start)) continue;
+                if (end != null && recordDate.isAfter(end)) continue;
+                newsIds.add(news.getNewsId());
+            }
+        }
+
+        // MySQL 执行多条件查询（走索引）
+        return newsRepository.queryNews(topic, minLength, maxLength, minHeadlineLength, maxHeadlineLength, new ArrayList<>(newsIds));
+    }
+
+
+
+
+
 
     // 热点新闻排行
     public Map<String, Double> getHotNews() {

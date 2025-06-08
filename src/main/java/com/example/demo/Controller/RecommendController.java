@@ -1,10 +1,12 @@
 package com.example.demo.Controller;
 
+import com.example.demo.Model.News;
 import com.example.demo.Service.KafkaConsumerService;
 import com.example.demo.Service.NewsService;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -45,6 +47,23 @@ public class RecommendController {
             @RequestParam String endDate) {
         return newsService.getUserInterest(userId, startDate, endDate);
     }
+    // 2.4组合查询
+    @GetMapping("/query")
+    public List<News> queryByMultipleConditions(
+            @RequestParam(required = false) List<String> userIds,
+            @RequestParam(required = false) String startDate,
+            @RequestParam(required = false) String endDate,
+            @RequestParam(required = false) String topic,
+            @RequestParam(required = false) Integer minLength,
+            @RequestParam(required = false) Integer maxLength,
+            @RequestParam(required = false) Integer minHeadlineLength,
+            @RequestParam(required = false) Integer maxHeadlineLength
+    ) {
+        return newsService.queryByConditionsOptimized(userIds, startDate, endDate,
+                topic, minLength, maxLength, minHeadlineLength, maxHeadlineLength);
+    }
+
+
 
     // 2.5热门新闻排行
     @GetMapping("/hot")

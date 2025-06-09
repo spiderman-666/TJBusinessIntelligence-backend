@@ -14,7 +14,9 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.Collectors;
-
+// 实时处理和推荐使用Spark Streaming, 落盘现在就行，它们是同步的
+// AI要推荐的能力，但要结合BI本地的数据
+// 推荐要考虑时效
 @Service
 @RequiredArgsConstructor
 public class KafkaConsumerService {
@@ -24,9 +26,12 @@ public class KafkaConsumerService {
     @Autowired
     private NewsRepository newsRepository;
 
+    @Autowired
+    private NewsQueryService newsQueryService;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    @KafkaListener(topics = "news-topic", groupId = "news-consumer-group")
+    @KafkaListener(id = "newsListener", topics = "news-topic", groupId = "news-consumer-group", containerFactory = "kafkaListenerContainerFactory")
     public void consume(String kafkaRecord) {
         try {
             System.out.println("收到Kafka消息: " + kafkaRecord);
@@ -51,11 +56,11 @@ public class KafkaConsumerService {
             stringRedisTemplate.opsForValue().set(redisKey, value);
 
             // 查询日志记录
-            Map<String, Object> queryLog = new HashMap<>();
-            queryLog.put("query", "Kafka消息处理");
-            queryLog.put("user", userId);
-            queryLog.put("time", System.currentTimeMillis());
-            stringRedisTemplate.opsForList().leftPush("query:log", objectMapper.writeValueAsString(queryLog));
+//            Map<String, Object> queryLog = new HashMap<>();
+//            queryLog.put("query", "Kafka消息处理");
+//            queryLog.put("user", userId);
+//            queryLog.put("time", System.currentTimeMillis());
+//            stringRedisTemplate.opsForList().leftPush("query:log", objectMapper.writeValueAsString(queryLog));
 
             System.out.println("已保存到 Redis, key=" + redisKey);
         } catch (Exception e) {
@@ -77,12 +82,12 @@ public class KafkaConsumerService {
 
             DateTimeFormatter inputFormatter = DateTimeFormatter.ofPattern("M/d/yyyy h:mm:ss a", Locale.US);
             DateTimeFormatter outputFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH");
-
             // 点击量（代表用户真实兴趣行为）
             for (ClickHistory clickHistory : clickHistoryList) {
                 String newsId = clickHistory.getNews_id();
                 int dwell = clickHistory.getDwell();
-                String exposeTimeStr = clickHistory.getExposureTime();
+                String exposeTimeStr = clickHistory.getExposure_time();
+
                 if (exposeTimeStr == null || exposeTimeStr.isEmpty()) continue;
                 LocalDateTime parsedTime = LocalDateTime.parse(exposeTimeStr, inputFormatter);
                 String exposeTime = parsedTime.format(outputFormatter);
@@ -92,19 +97,36 @@ public class KafkaConsumerService {
                 if (news == null) continue;
 
                 // topic 推荐构建（基于点击新闻的 topic）
+                String category = news.getCategory(); // 比如 "sports"
                 String topic = news.getTopic();
                 if (topic != null && !topic.isEmpty()) {
-                    // 查找同 topic 的新闻（排除自身）
-                    List<News> sameTopicNews = newsRepository.findByTopic(topic).stream()
-                            .filter(n -> !n.getNewsId().equals(newsId))
-                            .limit(10)  // 最多加 10 条，避免过多膨胀
-                            .toList();
+                    long start = System.currentTimeMillis();
+                    List<News> sameTopicNews = newsQueryService.queryNewsByCategoryAndTopic(category, topic, newsId, 10);
+                    long time = System.currentTimeMillis() - start;
+                    System.out.println("[SQL 查询日志] 方法: JdbcTemplate.query(...), 耗时: " + time + " ms");
+                    Map<String, Object> queryLog = new HashMap<>();
+                    queryLog.put("query", "JdbcTemplate.query");
+                    queryLog.put("time", time);
+                    queryLog.put("timestamp", System.currentTimeMillis());
+                    stringRedisTemplate.opsForList().leftPush("sql:query:log", objectMapper.writeValueAsString(queryLog));
 
                     for (News related : sameTopicNews) {
                         stringRedisTemplate.opsForZSet()
                                 .incrementScore("user:interest:related:" + newsId, related.getNewsId(), 1.0);
                     }
                 }
+//                String topic = news.getTopic();
+//                if (topic != null && !topic.isEmpty()) {
+//                    List<News> sameTopicNews = new ArrayList<>(newsRepository.findByTopic(topic))
+//                            .stream()
+//                            .filter(n -> !n.getNewsId().equals(newsId))
+//                            .limit(10)
+//                            .toList();
+//                    for (News related : sameTopicNews) {
+//                        stringRedisTemplate.opsForZSet()
+//                                .incrementScore("user:interest:related:" + newsId, related.getNewsId(), 1.0);
+//                    }
+//                }
                 // 记录新闻第一次点击时间
                 String recordKey = "news:time:record:" + newsId;
                 if (!Boolean.TRUE.equals(stringRedisTemplate.hasKey(recordKey))) {

@@ -15,9 +15,27 @@ public interface NewsRepository extends JpaRepository<News, String> {
             "(:minLen IS NULL OR n.length >= :minLen) AND " +
             "(:maxLen IS NULL OR n.length <= :maxLen) AND " +
             "(:minHeadlineLen IS NULL OR LENGTH(n.headline) >= :minHeadlineLen) AND " +
+            "(:maxHeadlineLen IS NULL OR LENGTH(n.headline) <= :maxHeadlineLen)"
+    )
+    List<News> queryNews(
+            @Param("topic") String topic,
+            @Param("minLen") Integer minLen,
+            @Param("maxLen") Integer maxLen,
+            @Param("minHeadlineLen") Integer minHeadlineLen,
+            @Param("maxHeadlineLen") Integer maxHeadlineLen
+    );
+
+    @Query("SELECT n.newsId FROM News n")
+    List<String> findAllNewsIds();
+
+    @Query("SELECT n FROM News n WHERE " +
+            "(:topic IS NULL OR n.topic = :topic) AND " +
+            "(:minLen IS NULL OR n.length >= :minLen) AND " +
+            "(:maxLen IS NULL OR n.length <= :maxLen) AND " +
+            "(:minHeadlineLen IS NULL OR LENGTH(n.headline) >= :minHeadlineLen) AND " +
             "(:maxHeadlineLen IS NULL OR LENGTH(n.headline) <= :maxHeadlineLen) AND " +
             "(:newsIds IS NULL OR n.newsId IN :newsIds)")
-    List<News> queryNews(
+    List<News> queryNewsById(
             @Param("topic") String topic,
             @Param("minLen") Integer minLen,
             @Param("maxLen") Integer maxLen,
@@ -25,9 +43,5 @@ public interface NewsRepository extends JpaRepository<News, String> {
             @Param("maxHeadlineLen") Integer maxHeadlineLen,
             @Param("newsIds") List<String> newsIds
     );
-
-    @Query("SELECT n.newsId FROM News n")
-    List<String> findAllNewsIds();
-
 
 }

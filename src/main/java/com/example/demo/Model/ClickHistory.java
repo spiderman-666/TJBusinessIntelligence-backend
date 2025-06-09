@@ -9,7 +9,7 @@ import java.time.LocalDateTime;
 public class ClickHistory {
     private String news_id;         // 新闻ID
     private int dwell;              // 停留时间
-    private String exposureTime;
+    private String exposure_time;
 
 
     // Getters and Setters
@@ -29,11 +29,11 @@ public class ClickHistory {
         this.dwell = dwell;
     }
 
-    public String getExposureTime() {
-        return exposureTime;
+    public String getExposure_time() {
+        return exposure_time;
     }
 
-    public void setExposureTime(String exposure_time) {
-        this.exposureTime = exposure_time;
+    public void setExposure_time(String exposure_time) {
+        this.exposure_time = exposure_time;
     }
 }

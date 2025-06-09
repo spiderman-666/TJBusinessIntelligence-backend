@@ -110,9 +110,13 @@ public class NewsService {
             Integer minHeadlineLength, Integer maxHeadlineLength
     ) {
         DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
-        LocalDate start = (startDate != null) ? LocalDate.parse(startDate, formatter) : null;
-        LocalDate end = (endDate != null) ? LocalDate.parse(endDate, formatter) : null;
+        LocalDate start = (startDate != null && !startDate.trim().isEmpty())
+                ? LocalDate.parse(startDate, formatter)
+                : null;
 
+        LocalDate end = (endDate != null && !endDate.trim().isEmpty())
+                ? LocalDate.parse(endDate, formatter)
+                : null;
         Set<String> newsIds = new HashSet<>();
 
         if (userIds != null && !userIds.isEmpty()) {
@@ -123,26 +127,29 @@ public class NewsService {
                     if (ids != null) newsIds.addAll(ids);
                 }
             }
+            return newsRepository.queryNewsById(topic, minLength, maxLength, minHeadlineLength, maxHeadlineLength, new ArrayList<>(newsIds));
         } else {
             // 查询所有新闻 ID 从 Redis 判断时间
-            List<News> allNews = newsRepository.findAll();
-            for (News news : allNews) {
+            // List<News> allNews = newsRepository.findAll();
+            List<News> result = new ArrayList<>();
+            List<News> all = newsRepository.queryNews(topic, minLength, maxLength, minHeadlineLength, maxHeadlineLength);
+            for (News news : all) {
+                System.out.println(news.getNewsId());
                 String record = redisTemplate.opsForValue().get("news:time:record:" + news.getNewsId());
-                if (record == null || record.length() < 10) continue;
+                if (record == null || record.length() < 10) {
+                    newsIds.add(news.getNewsId());
+                    result.add(news);
+                    continue;
+                }
                 LocalDate recordDate = LocalDate.parse(record.substring(0, 10), formatter);
                 if (start != null && recordDate.isBefore(start)) continue;
                 if (end != null && recordDate.isAfter(end)) continue;
                 newsIds.add(news.getNewsId());
+                result.add(news);
             }
+            return result;
         }
-
-        // MySQL 执行多条件查询（走索引）
-        return newsRepository.queryNews(topic, minLength, maxLength, minHeadlineLength, maxHeadlineLength, new ArrayList<>(newsIds));
     }
-
-
-
-
 
 
     // 热点新闻排行

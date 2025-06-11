@@ -1,9 +1,6 @@
 package com.example.demo.Model;
 
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.Id;
-import jakarta.persistence.Table;
+import jakarta.persistence.*;
 import lombok.Data;
 
 import java.time.LocalDateTime;
@@ -29,4 +26,6 @@ public class News {
     private LocalDateTime exposure_time;
     @Column(name = "Length")
     private Integer length;
+    @Transient
+    private String newsbody;
 }

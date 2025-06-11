@@ -63,8 +63,6 @@ public class RecommendController {
                 topic, minLength, maxLength, minHeadlineLength, maxHeadlineLength);
     }
 
-
-
     // 2.5热门新闻排行
     @GetMapping("/hot")
     public Map<String, Double> getHotNewsRank() {
@@ -73,7 +71,13 @@ public class RecommendController {
 
     // 2.6推荐新闻
     @GetMapping("/recommend")
-    public Map<String, Double> recommend(@RequestParam String userId) {
+    public Map<String, Object> recommend(@RequestParam String userId) {
         return newsService.recommendNews(userId);
+    }
+
+    // 2.8通过新闻ID查询新闻
+    @GetMapping("/{id}")
+    public Map<String, Object> getNews(@PathVariable String id) {
+        return newsService.getNews(id);
     }
 }

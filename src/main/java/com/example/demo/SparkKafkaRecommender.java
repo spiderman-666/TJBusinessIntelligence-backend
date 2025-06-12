@@ -1,5 +1,7 @@
 package com.example.demo;
 
+import com.example.demo.Service.AIService;
+import com.example.demo.Service.RecommendService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -24,11 +26,12 @@ import java.util.stream.Collectors;
 
 public class SparkKafkaRecommender {
     public static void main(String[] args) throws InterruptedException {
+        RecommendService recommendService = new RecommendService();
         SparkConf conf = new SparkConf().setAppName("NewsRecommender").setMaster("local[*]");
         JavaStreamingContext ssc = new JavaStreamingContext(conf, Durations.seconds(5));
 
         Map<String, Object> kafkaParams = new HashMap<>();
-        kafkaParams.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
+        kafkaParams.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "100.80.74.200:9092");
         kafkaParams.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
         kafkaParams.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
         kafkaParams.put(ConsumerConfig.GROUP_ID_CONFIG, "spark-recommend-group");
@@ -46,7 +49,8 @@ public class SparkKafkaRecommender {
         stream.foreachRDD((VoidFunction<JavaRDD<ConsumerRecord<String, String>>>) rdd -> {
             rdd.foreachPartition(partition -> {
                 ObjectMapper mapper = new ObjectMapper();
-                Jedis jedis = new Jedis("localhost", 6379);
+                Jedis jedis = new Jedis("47.116.116.60", 6379);
+                jedis.auth("Admin-123");
 
                 while (partition.hasNext()) {
                     ConsumerRecord<String, String> record = partition.next();
@@ -71,10 +75,13 @@ public class SparkKafkaRecommender {
                                 + ". Recommend 5 news topics.";
                         String aiResult = callChatGPT(prompt);
 
-                        // 组合结果（这里只是简单拼接）
+                        // 加上兴趣传播推荐
+                        Map<String, Double> interestRecs = recommendService.recommendBasedOnUserInterest(userId, jedis);
+
                         Map<String, Object> result = new HashMap<>();
                         result.put("ai", aiResult);
                         result.put("hot", hotNews);
+                        result.put("interest", interestRecs);
 
                         String resultJson = mapper.writeValueAsString(result);
                         jedis.set("user:recommend:" + userId, resultJson);
@@ -94,19 +101,18 @@ public class SparkKafkaRecommender {
         try {
             HttpClient client = HttpClient.newHttpClient();
 
-//            String body = """
-//        {
-//          "messages": [
-//            {
-//              "role": "user",
-//              "content": "%s"
-//            }
-//          ],
-//          "max_tokens": 1024,
-//          "temperature": 0.0
-//        }
-//        """.formatted(prompt.replace("\"", "\\\""));
-            String body = "";
+            String body = """
+        {
+          "messages": [
+            {
+              "role": "user",
+              "content": "%s"
+            }
+          ],
+          "max_tokens": 1024,
+          "temperature": 0.0
+        }
+        """.formatted(prompt.replace("\"", "\\\""));
 
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create("https://ai-cxk200045417ai996429688790.openai.azure.com/openai/deployments/gpt-4o-mini/chat/completions?api-version=2025-01-01-preview"))

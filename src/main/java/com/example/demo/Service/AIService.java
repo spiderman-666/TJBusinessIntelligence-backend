@@ -13,6 +13,7 @@ public class AIService {
 
     private final StringRedisTemplate redisTemplate;
 
+
     // 基于用户兴趣 + 权重传播的协同过滤推荐
     public Map<String, Double> recommendBasedOnUserInterest(String userId) {
         String key = "user:interest:" + userId;

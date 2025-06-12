@@ -4,6 +4,7 @@ package com.example.demo.Service;
 import com.example.demo.Model.News;
 import com.example.demo.Repository.NewsRepository;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -171,14 +172,35 @@ public class NewsService {
         }
 
         try {
-            // 示例 JSON: { "ai": "...", "hot": ["n001", "n002", ...] }
             ObjectMapper objectMapper = new ObjectMapper();
-            return objectMapper.readValue(json, new TypeReference<>() {});
+            Map<String, Object> baseResult = objectMapper.readValue(json, new TypeReference<>() {});
+
+            // 提取 aiNews 中的 ID
+            JsonNode root = objectMapper.readTree(json);
+            JsonNode aiNewsArray = root.get("aiNews");
+
+            List<String> ids = new ArrayList<>();
+            if (aiNewsArray != null && aiNewsArray.isArray()) {
+                for (JsonNode item : aiNewsArray) {
+                    ids.add(item.get("id").asText());
+                }
+            }
+            List<Map<String, Object>> fullNews = new ArrayList<>();
+            // 查 MySQL 获取完整新闻内容
+            for (String id : ids) {
+                fullNews.add(getNews(id));
+            }
+
+            baseResult.remove("aiNews");
+            // 合并结果
+            baseResult.put("aiNewsFull", fullNews);
+            return baseResult;
+
         } catch (Exception e) {
             return Map.of("error", "Failed to parse recommendation", "exception", e.getMessage());
         }
-        // return aiService.recommendBasedOnUserInterest(userId);
     }
+
 
     private Map<String, Double> getZSetAsMap(String key) {
         Map<String, Double> map = new LinkedHashMap<>();

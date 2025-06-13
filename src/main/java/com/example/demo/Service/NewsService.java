@@ -2,7 +2,9 @@ package com.example.demo.Service;
 
 
 import com.example.demo.Model.News;
+import com.example.demo.Model.Query;
 import com.example.demo.Repository.NewsRepository;
+import com.example.demo.Repository.QueryRepository;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -11,6 +13,8 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Service;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -24,6 +28,7 @@ public class NewsService {
     private final StringRedisTemplate redisTemplate;
     private final NewsRepository newsRepository;
     private final DataService dataService;
+    private final QueryRepository queryRepository;
 
     // 获取某条新闻的生命周期：点击+曝光按小时
     public Map<String, Map<String, Long>> getNewsLifecycleRange(String newsId, String startDate, String endDate) {
@@ -103,7 +108,14 @@ public class NewsService {
             }
         }
 
-        return totalInterest;
+        // 按分数降序排序并返回有序 LinkedHashMap
+        return totalInterest.entrySet().stream()
+                .sorted(Map.Entry.<String, Double>comparingByValue().reversed())
+                .collect(
+                        LinkedHashMap::new,
+                        (m, e) -> m.put(e.getKey(), e.getValue()),
+                        LinkedHashMap::putAll
+                );
     }
 
     // 组合查询
@@ -131,10 +143,38 @@ public class NewsService {
                     if (ids != null) newsIds.addAll(ids);
                 }
             }
+            long begin = System.currentTimeMillis();
+            LocalDateTime localDateTime = LocalDateTime.now();
             result =  newsRepository.queryNewsById(topic, minLength, maxLength, minHeadlineLength, maxHeadlineLength, new ArrayList<>(newsIds));
+            long time = System.currentTimeMillis() - begin;
+            String queryParam = String.format(
+                    "topic=%s&minLength=%d&maxLength=%d&minHeadlineLength=%d&maxHeadlineLength=%d&newsIds=%s",
+                    URLEncoder.encode(topic, StandardCharsets.UTF_8),
+                    minLength,
+                    maxLength,
+                    minHeadlineLength,
+                    maxHeadlineLength,
+                    URLEncoder.encode(String.join(",", newsIds), StandardCharsets.UTF_8)
+            );
+            Query query = new Query(localDateTime, "/api/news/query","queryNewsById",queryParam, time, result.size(), "200", null, "news", begin);
+            queryRepository.save(query);
         } else {
+            long begin = System.currentTimeMillis();
+            LocalDateTime localDateTime = LocalDateTime.now();
             // 查询所有新闻 ID 从 Redis 判断时间
             List<News> all = newsRepository.queryNews(topic, minLength, maxLength, minHeadlineLength, maxHeadlineLength);
+            long time = System.currentTimeMillis() - begin;
+            String queryParam = String.format(
+                    "topic=%s&minLength=%d&maxLength=%d&minHeadlineLength=%d&maxHeadlineLength=%d&newsIds=%s",
+                    URLEncoder.encode(topic, StandardCharsets.UTF_8),
+                    minLength,
+                    maxLength,
+                    minHeadlineLength,
+                    maxHeadlineLength,
+                    URLEncoder.encode(String.join(",", newsIds), StandardCharsets.UTF_8)
+            );
+            Query query = new Query(localDateTime, "/api/news/query",queryParam,"newsId", time, all.size(), "200", null, "news", begin);
+            queryRepository.save(query);
             for (News news : all) {
                 Map<String, Object> newsContent = dataService.getNewsByIdInSecondDatabase(news.getNewsId());
                 if (newsContent != null && newsContent.get("newsbody") != null) {
@@ -221,8 +261,13 @@ public class NewsService {
 
     // 通过新闻ID查找新闻
     public Map<String, Object> getNews(String id) {
+        long begin = System.currentTimeMillis();
+        LocalDateTime localDateTime = LocalDateTime.now();
         Map<String, Object> first = dataService.getNewsByIdInFirstDatabase(id);
         Map<String, Object> second = dataService.getNewsByIdInSecondDatabase(id);
+        long time = System.currentTimeMillis() - begin;
+        Query query = new Query(localDateTime, "/api/news/{id}","getNewsByIdInFirstAndSecondDatabase","id" + id, time, first.size() + second.size(), "200", null, "news", begin);
+        queryRepository.save(query);
         // 如果两个结果都为空，返回 null
         if ((first == null || first.isEmpty()) && (second == null || second.isEmpty())) {
             return null;

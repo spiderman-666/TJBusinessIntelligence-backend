@@ -2,6 +2,7 @@ package com.example.demo.Service;
 
 import com.example.demo.Model.*;
 import com.example.demo.Repository.NewsRepository;
+import com.example.demo.Repository.QueryRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -10,6 +11,8 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
@@ -29,6 +32,9 @@ public class KafkaConsumerService {
     @Autowired
     private NewsQueryService newsQueryService;
 
+    @Autowired
+    private QueryRepository queryRepository;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @KafkaListener(id = "newsListener", topics = "news-topic", groupId = "news-consumer-group", containerFactory = "kafkaListenerContainerFactory")
@@ -42,7 +48,6 @@ public class KafkaConsumerService {
 
             // 解析内层 message 字段
             ClickLog clickLog = objectMapper.readValue(rawMessage, ClickLog.class);
-            //String timestamp = clickLog.getTimestamp();
             String userId = clickLog.getUser_id();
             List<ClickHistory> clickHistoryList = clickLog.getClick_history();
             Impression impression = clickLog.getImpression();
@@ -54,13 +59,6 @@ public class KafkaConsumerService {
             String redisKey = "user:click:" + userId;
             String value = objectMapper.writeValueAsString(clickLog);
             stringRedisTemplate.opsForValue().set(redisKey, value);
-
-            // 查询日志记录
-//            Map<String, Object> queryLog = new HashMap<>();
-//            queryLog.put("query", "Kafka消息处理");
-//            queryLog.put("user", userId);
-//            queryLog.put("time", System.currentTimeMillis());
-//            stringRedisTemplate.opsForList().leftPush("query:log", objectMapper.writeValueAsString(queryLog));
 
             System.out.println("已保存到 Redis, key=" + redisKey);
         } catch (Exception e) {
@@ -76,18 +74,24 @@ public class KafkaConsumerService {
             for (ClickHistory ch : clickHistoryList) newsIdSet.add(ch.getNews_id());
             for (Clicked c : impression.getClicked()) newsIdSet.add(c.getNews_id());
 
-            // 批量查找新闻数据，避免重复查询
+            // 批量查找新闻数据，避免重复查询，并添加到查询日志中
+            long begin = System.currentTimeMillis();
+            LocalDateTime localDateTime = LocalDateTime.now();
             Map<String, News> newsMap = newsRepository.findAllById(newsIdSet).stream()
                     .collect(Collectors.toMap(News::getNewsId, n -> n));
-
+            String queryParam = "newsIds=" + String.join(",", newsIdSet);
+            long time = System.currentTimeMillis() - begin;
+            Query query = new Query(localDateTime, "storage","findAllById",queryParam, time, newsMap.size(), "200", null, "news", begin);
+            queryRepository.save(query);
+            // 格式化时间
             DateTimeFormatter inputFormatter = DateTimeFormatter.ofPattern("M/d/yyyy h:mm:ss a", Locale.US);
             DateTimeFormatter outputFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH");
             // 点击量（代表用户真实兴趣行为）
             for (ClickHistory clickHistory : clickHistoryList) {
+                // 提取字段
                 String newsId = clickHistory.getNews_id();
                 int dwell = clickHistory.getDwell();
                 String exposeTimeStr = clickHistory.getExposure_time();
-
                 if (exposeTimeStr == null || exposeTimeStr.isEmpty()) continue;
                 LocalDateTime parsedTime = LocalDateTime.parse(exposeTimeStr, inputFormatter);
                 String exposeTime = parsedTime.format(outputFormatter);
@@ -100,16 +104,19 @@ public class KafkaConsumerService {
                 String category = news.getCategory(); // 比如 "sports"
                 String topic = news.getTopic();
                 if (topic != null && !topic.isEmpty()) {
-                    long start = System.currentTimeMillis();
+                    // 构建查询日志
+                    begin = System.currentTimeMillis();
+                    localDateTime = LocalDateTime.now();
                     List<News> sameTopicNews = newsQueryService.queryNewsByCategoryAndTopic(category, topic, newsId, 10);
-                    long time = System.currentTimeMillis() - start;
-                    System.out.println("[SQL 查询日志] 方法: JdbcTemplate.query(...), 耗时: " + time + " ms");
-                    Map<String, Object> queryLog = new HashMap<>();
-                    queryLog.put("query", "JdbcTemplate.query");
-                    queryLog.put("time", time);
-                    queryLog.put("timestamp", System.currentTimeMillis());
-                    stringRedisTemplate.opsForList().leftPush("sql:query:log", objectMapper.writeValueAsString(queryLog));
-
+                    time = System.currentTimeMillis() - begin;
+                    String queryParams = String.format(
+                            "category=%s&topic=%s&excludeNewsId=%s&limit=10",
+                            URLEncoder.encode(category, StandardCharsets.UTF_8),
+                            URLEncoder.encode(topic, StandardCharsets.UTF_8),
+                            URLEncoder.encode(newsId, StandardCharsets.UTF_8)
+                    );
+                    new Query(localDateTime, "storage","queryNewsByCategoryAndTopic",queryParams, time, sameTopicNews.size(), "200", null, "news", begin);
+                    // 查询相同topic新闻并保存
                     for (News related : sameTopicNews) {
                         stringRedisTemplate.opsForZSet()
                                 .incrementScore("user:interest:related:" + newsId, related.getNewsId(), 1.0);
@@ -164,6 +171,8 @@ public class KafkaConsumerService {
                 stringRedisTemplate.opsForZSet().incrementScore("news:time:expose:" + start.substring(0, 13), newsId, 1);
                 // 每日曝光类别统计(2.2类别新闻变化统计)
                 stringRedisTemplate.opsForZSet().incrementScore("category:expose:" + day, news.getCategory(), 1);
+
+
             }
         } catch (Exception e) {
             e.printStackTrace();

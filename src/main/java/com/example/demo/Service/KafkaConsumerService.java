@@ -115,18 +115,7 @@ public class KafkaConsumerService {
                                 .incrementScore("user:interest:related:" + newsId, related.getNewsId(), 1.0);
                     }
                 }
-//                String topic = news.getTopic();
-//                if (topic != null && !topic.isEmpty()) {
-//                    List<News> sameTopicNews = new ArrayList<>(newsRepository.findByTopic(topic))
-//                            .stream()
-//                            .filter(n -> !n.getNewsId().equals(newsId))
-//                            .limit(10)
-//                            .toList();
-//                    for (News related : sameTopicNews) {
-//                        stringRedisTemplate.opsForZSet()
-//                                .incrementScore("user:interest:related:" + newsId, related.getNewsId(), 1.0);
-//                    }
-//                }
+
                 // 记录新闻第一次点击时间
                 String recordKey = "news:time:record:" + newsId;
                 if (!Boolean.TRUE.equals(stringRedisTemplate.hasKey(recordKey))) {
@@ -150,7 +139,7 @@ public class KafkaConsumerService {
                 // 总兴趣(2.3)
                 // stringRedisTemplate.opsForZSet().incrementScore("user:interest:" + userId, newsId, 1);
                 // 每日兴趣快照(2.3)
-                stringRedisTemplate.opsForZSet().incrementScore("user:interest:" + userId + ":" + day, newsId, 1);
+                stringRedisTemplate.opsForZSet().incrementScore("user:interest:" + userId + ":" + day, newsId, Math.log(dwell + 1));
                 // 基于停留时间进行推荐(2.6)
                 stringRedisTemplate.opsForZSet().incrementScore("user:interest:" + userId, newsId, Math.log(dwell + 1));
 

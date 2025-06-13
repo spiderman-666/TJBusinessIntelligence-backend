@@ -49,7 +49,7 @@ public class RecommendController {
     }
     // 2.4组合查询
     @GetMapping("/query")
-    public List<News> queryByMultipleConditions(
+    public List<Map<String, Object>> queryByMultipleConditions(
             @RequestParam(required = false) List<String> userIds,
             @RequestParam(required = false) String startDate,
             @RequestParam(required = false) String endDate,

@@ -22,7 +22,6 @@ import java.util.stream.Collectors;
 public class NewsService {
 
     private final StringRedisTemplate redisTemplate;
-    private final AIService aiService;
     private final NewsRepository newsRepository;
     private final DataService dataService;
 
@@ -108,7 +107,7 @@ public class NewsService {
     }
 
     // 组合查询
-    public List<News> queryByConditionsOptimized(
+    public List<Map<String, Object>> queryByConditionsOptimized(
             List<String> userIds, String startDate, String endDate,
             String topic, Integer minLength, Integer maxLength,
             Integer minHeadlineLength, Integer maxHeadlineLength
@@ -122,7 +121,8 @@ public class NewsService {
                 ? LocalDate.parse(endDate, formatter)
                 : null;
         Set<String> newsIds = new HashSet<>();
-
+        List<News> result = new ArrayList<>();
+        List<Map<String, Object>> answer = new ArrayList<>();
         if (userIds != null && !userIds.isEmpty()) {
             for (String userId : userIds) {
                 for (LocalDate date = start; !date.isAfter(end); date = date.plusDays(1)) {
@@ -131,10 +131,9 @@ public class NewsService {
                     if (ids != null) newsIds.addAll(ids);
                 }
             }
-            return newsRepository.queryNewsById(topic, minLength, maxLength, minHeadlineLength, maxHeadlineLength, new ArrayList<>(newsIds));
+            result =  newsRepository.queryNewsById(topic, minLength, maxLength, minHeadlineLength, maxHeadlineLength, new ArrayList<>(newsIds));
         } else {
             // 查询所有新闻 ID 从 Redis 判断时间
-            List<News> result = new ArrayList<>();
             List<News> all = newsRepository.queryNews(topic, minLength, maxLength, minHeadlineLength, maxHeadlineLength);
             for (News news : all) {
                 Map<String, Object> newsContent = dataService.getNewsByIdInSecondDatabase(news.getNewsId());
@@ -153,8 +152,11 @@ public class NewsService {
                 newsIds.add(news.getNewsId());
                 result.add(news);
             }
-            return result;
         }
+        for (News news : result) {
+            answer.add(getNews(news.getNewsId()));
+        }
+        return answer;
     }
 
 

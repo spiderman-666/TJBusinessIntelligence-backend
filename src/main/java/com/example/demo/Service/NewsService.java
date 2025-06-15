@@ -255,7 +255,7 @@ public class NewsService {
             Map<String, Object> map = new HashMap<>();
             map.put("news_id", news.getNewsId());
             map.put("Topic", news.getTopic());
-            map.put("category", news.getCategory());
+            map.put("Category", news.getCategory());
             map.put("Length", news.getLength());
             map.put("Headline", news.getHeadline());
             map.put("dwell", news.getDwell());

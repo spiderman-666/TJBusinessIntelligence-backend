@@ -38,4 +38,8 @@ public class Query {
         this.module = module;
         this.log_date = new Date(log_date);
     }
+
+    public Query() {
+
+    }
 }

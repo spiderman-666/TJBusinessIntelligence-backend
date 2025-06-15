@@ -150,6 +150,8 @@ public class NewsService {
         List<News> result = new ArrayList<>();
         List<Map<String, Object>> answer = new ArrayList<>();
 
+        Pageable limit100 = PageRequest.of(0, 100);   // 只要第一页，大小 100
+
         // 用户ID存在，且start/end不为null时才进行基于Redis兴趣的查询
         if (userIds != null && !userIds.isEmpty() && start != null && end != null) {
             for (String userId : userIds) {
@@ -164,7 +166,7 @@ public class NewsService {
             LocalDateTime localDateTime = LocalDateTime.now();
 
             result = newsRepository.queryNewsById(
-                    topic, minLength, maxLength, minHeadlineLength, maxHeadlineLength, new ArrayList<>(newsIds)
+                    topic, minLength, maxLength, minHeadlineLength, maxHeadlineLength, new ArrayList<>(newsIds), limit100
             );
 
             long time = System.currentTimeMillis() - begin;
@@ -192,12 +194,10 @@ public class NewsService {
             long begin = System.currentTimeMillis();
             LocalDateTime localDateTime = LocalDateTime.now();
 
-
-
-            // ✅ 第一步：只查询符合 topic、length 等筛选条件的 newsId（不查整个 News 实体）
+            // 第一步：只查询符合 topic、length 等筛选条件的 newsId（不查整个 News 实体）
             // 你需要实现一个类似 findNewsIdsByConditions() 的方法，只查字段而不是对象（优化性能）
-            List<String> allNewsIds = newsRepository.queryNews(
-                    topic, minLength, maxLength, minHeadlineLength, maxHeadlineLength
+            List<News> allNews = newsRepository.queryNews(
+                    topic, minLength, maxLength, minHeadlineLength, maxHeadlineLength, limit100
             );
 
             long time = System.currentTimeMillis() - begin;
@@ -216,22 +216,22 @@ public class NewsService {
                     safeNewsIds
             );
 
-            // ✅ 第二步：记录日志
+            // 第二步：记录日志
             Query query = new Query(localDateTime, "/api/news/query", queryParam,
-                    "newsId", time, allNewsIds.size(), "200", null, "news", begin);
+                    "newsId", time, allNews.size(), "200", null, "news", begin);
             queryRepository.save(query);
 
-            // ✅ 第三步：遍历每个 newsId，检查 Redis 中的发布时间是否符合筛选条件
-            for (String newsId : allNewsIds) {
-                if (result.size() >= 100) break;  // ✅ 加入数量上限控制
+            // 第三步：遍历每个 newsId，检查 Redis 中的发布时间是否符合筛选条件
+            for (News news : allNews) {
+                //if (result.size() >= 100) break;  // 加入数量上限控制
+                String newsId = news.getNewsId();
 
                 // 获取 Redis 中记录的发布时间（如：2025-06-10T12:34:56）
                 String record = redisTemplate.opsForValue().get("news:time:record:" + newsId);
 
                 // 如果 Redis 中没有时间，或格式太短，直接通过
                 if (record == null || record.length() < 10) {
-                    newsIds.add(newsId);
-                    result.add(new News(newsId));  // 此处只占位，稍后通过 getNews(newsId) 补全
+                    result.add(news);
                     continue;
                 }
 
@@ -247,16 +247,24 @@ public class NewsService {
                 if (start != null && recordDate.isBefore(start)) continue;
                 if (end != null && recordDate.isAfter(end)) continue;
 
-                newsIds.add(newsId);
-                result.add(new News(newsId));  // 只填 newsId
+                result.add(news);
             }
 
         }
-
         for (News news : result) {
-            answer.add(getNews(news.getNewsId()));
+            Map<String, Object> map = new HashMap<>();
+            map.put("news_id", news.getNewsId());
+            map.put("Topic", news.getTopic());
+            map.put("category", news.getCategory());
+            map.put("Length", news.getLength());
+            map.put("Headline", news.getHeadline());
+            map.put("dwell", news.getDwell());
+            map.put("exposure_time", news.getExposure_time());
+            map.put("headline_length", news.getHeadlineLength());
+            map.put("newsbody", "");
+            map.put("title_entity","");
+            answer.add(map);
         }
-
         return answer;
     }
 

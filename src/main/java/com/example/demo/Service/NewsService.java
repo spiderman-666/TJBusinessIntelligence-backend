@@ -117,7 +117,6 @@ public class NewsService {
                         LinkedHashMap::putAll
                 );
     }
-
     // 组合查询
     public List<Map<String, Object>> queryByConditionsOptimized(
             List<String> userIds, String startDate, String endDate,
@@ -132,10 +131,13 @@ public class NewsService {
         LocalDate end = (endDate != null && !endDate.trim().isEmpty())
                 ? LocalDate.parse(endDate, formatter)
                 : null;
+
         Set<String> newsIds = new HashSet<>();
         List<News> result = new ArrayList<>();
         List<Map<String, Object>> answer = new ArrayList<>();
-        if (userIds != null && !userIds.isEmpty()) {
+
+        // 用户ID存在，且start/end不为null时才进行基于Redis兴趣的查询
+        if (userIds != null && !userIds.isEmpty() && start != null && end != null) {
             for (String userId : userIds) {
                 for (LocalDate date = start; !date.isAfter(end); date = date.plusDays(1)) {
                     String key = "user:interest:" + userId + ":" + date.format(formatter);
@@ -143,61 +145,100 @@ public class NewsService {
                     if (ids != null) newsIds.addAll(ids);
                 }
             }
+
             long begin = System.currentTimeMillis();
             LocalDateTime localDateTime = LocalDateTime.now();
-            result =  newsRepository.queryNewsById(topic, minLength, maxLength, minHeadlineLength, maxHeadlineLength, new ArrayList<>(newsIds));
-            long time = System.currentTimeMillis() - begin;
-            String queryParam = String.format(
-                    "topic=%s&minLength=%d&maxLength=%d&minHeadlineLength=%d&maxHeadlineLength=%d&newsIds=%s",
-                    URLEncoder.encode(topic, StandardCharsets.UTF_8),
-                    minLength,
-                    maxLength,
-                    minHeadlineLength,
-                    maxHeadlineLength,
-                    URLEncoder.encode(String.join(",", newsIds), StandardCharsets.UTF_8)
+
+            result = newsRepository.queryNewsById(
+                    topic, minLength, maxLength, minHeadlineLength, maxHeadlineLength, new ArrayList<>(newsIds)
             );
-            Query query = new Query(localDateTime, "/api/news/query","queryNewsById",queryParam, time, result.size(), "200", null, "news", begin);
+
+            long time = System.currentTimeMillis() - begin;
+            String safeTopic = (topic != null) ? URLEncoder.encode(topic, StandardCharsets.UTF_8) : "null";
+            String safeNewsIds = (newsIds != null && !newsIds.isEmpty())
+                    ? URLEncoder.encode(String.join(",", newsIds), StandardCharsets.UTF_8)
+                    : "null";
+
+            String queryParam = String.format(
+                    "topic=%s&minLength=%s&maxLength=%s&minHeadlineLength=%s&maxHeadlineLength=%s&newsIds=%s",
+                    safeTopic,
+                    String.valueOf(minLength),
+                    String.valueOf(maxLength),
+                    String.valueOf(minHeadlineLength),
+                    String.valueOf(maxHeadlineLength),
+                    safeNewsIds
+            );
+
+
+            Query query = new Query(localDateTime, "/api/news/query", "queryNewsById",
+                    queryParam, time, result.size(), "200", null, "news", begin);
             queryRepository.save(query);
         } else {
+            // 非用户兴趣查询模式：全库查询 + Redis判断时间是否符合条件
             long begin = System.currentTimeMillis();
             LocalDateTime localDateTime = LocalDateTime.now();
-            // 查询所有新闻 ID 从 Redis 判断时间
-            List<News> all = newsRepository.queryNews(topic, minLength, maxLength, minHeadlineLength, maxHeadlineLength);
-            long time = System.currentTimeMillis() - begin;
-            String queryParam = String.format(
-                    "topic=%s&minLength=%d&maxLength=%d&minHeadlineLength=%d&maxHeadlineLength=%d&newsIds=%s",
-                    URLEncoder.encode(topic, StandardCharsets.UTF_8),
-                    minLength,
-                    maxLength,
-                    minHeadlineLength,
-                    maxHeadlineLength,
-                    URLEncoder.encode(String.join(",", newsIds), StandardCharsets.UTF_8)
+
+            List<News> all = newsRepository.queryNews(
+                    topic, minLength, maxLength, minHeadlineLength, maxHeadlineLength
             );
-            Query query = new Query(localDateTime, "/api/news/query",queryParam,"newsId", time, all.size(), "200", null, "news", begin);
+
+            long time = System.currentTimeMillis() - begin;
+            String safeTopic = (topic != null) ? URLEncoder.encode(topic, StandardCharsets.UTF_8) : "null";
+            String safeNewsIds = (newsIds != null && !newsIds.isEmpty())
+                    ? URLEncoder.encode(String.join(",", newsIds), StandardCharsets.UTF_8)
+                    : "null";
+
+            String queryParam = String.format(
+                    "topic=%s&minLength=%s&maxLength=%s&minHeadlineLength=%s&maxHeadlineLength=%s&newsIds=%s",
+                    safeTopic,
+                    String.valueOf(minLength),
+                    String.valueOf(maxLength),
+                    String.valueOf(minHeadlineLength),
+                    String.valueOf(maxHeadlineLength),
+                    safeNewsIds
+            );
+
+
+            Query query = new Query(localDateTime, "/api/news/query", queryParam,
+                    "newsId", time, all.size(), "200", null, "news", begin);
             queryRepository.save(query);
+
             for (News news : all) {
                 Map<String, Object> newsContent = dataService.getNewsByIdInSecondDatabase(news.getNewsId());
                 if (newsContent != null && newsContent.get("newsbody") != null) {
                     news.setNewsbody(newsContent.get("newsbody").toString());
                 }
+
                 String record = redisTemplate.opsForValue().get("news:time:record:" + news.getNewsId());
                 if (record == null || record.length() < 10) {
                     newsIds.add(news.getNewsId());
                     result.add(news);
                     continue;
                 }
-                LocalDate recordDate = LocalDate.parse(record.substring(0, 10), formatter);
+
+                LocalDate recordDate;
+                try {
+                    recordDate = LocalDate.parse(record.substring(0, 10), formatter);
+                } catch (Exception e) {
+                    // 如果日期格式错误，跳过
+                    continue;
+                }
+
                 if (start != null && recordDate.isBefore(start)) continue;
                 if (end != null && recordDate.isAfter(end)) continue;
+
                 newsIds.add(news.getNewsId());
                 result.add(news);
             }
         }
+
         for (News news : result) {
             answer.add(getNews(news.getNewsId()));
         }
+
         return answer;
     }
+
 
 
     // 热点新闻排行

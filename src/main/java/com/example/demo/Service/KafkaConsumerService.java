@@ -37,7 +37,7 @@ public class KafkaConsumerService {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    @KafkaListener(id = "newsListener", topics = "news-topic", groupId = "news-consumer-group", containerFactory = "kafkaListenerContainerFactory")
+    //@KafkaListener(id = "newsListener", topics = "news-topic", groupId = "news-consumer-group", containerFactory = "kafkaListenerContainerFactory")
     public void consume(String kafkaRecord) {
         try {
             System.out.println("收到Kafka消息: " + kafkaRecord);

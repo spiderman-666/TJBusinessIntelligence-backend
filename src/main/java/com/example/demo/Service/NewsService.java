@@ -3,15 +3,21 @@ package com.example.demo.Service;
 
 import com.example.demo.Model.News;
 import com.example.demo.Model.Query;
+import com.example.demo.Repository.NewsQueryRepository;
 import com.example.demo.Repository.NewsRepository;
 import com.example.demo.Repository.QueryRepository;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Service;
+
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -19,6 +25,8 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import jakarta.persistence.criteria.Predicate;
+
 import java.util.stream.Collectors;
 
 @Service
@@ -29,6 +37,7 @@ public class NewsService {
     private final NewsRepository newsRepository;
     private final DataService dataService;
     private final QueryRepository queryRepository;
+    private final NewsQueryRepository newsQueryRepository;
 
     // 获取某条新闻的生命周期：点击+曝光按小时
     public Map<String, Map<String, Long>> getNewsLifecycleRange(String newsId, String startDate, String endDate) {
@@ -117,12 +126,17 @@ public class NewsService {
                         LinkedHashMap::putAll
                 );
     }
+
     // 组合查询
     public List<Map<String, Object>> queryByConditionsOptimized(
             List<String> userIds, String startDate, String endDate,
             String topic, Integer minLength, Integer maxLength,
             Integer minHeadlineLength, Integer maxHeadlineLength
     ) {
+        // 处理空字符串转 null
+        if (topic != null && topic.trim().isEmpty()) {
+            topic = null;
+        }
         DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
         LocalDate start = (startDate != null && !startDate.trim().isEmpty())
                 ? LocalDate.parse(startDate, formatter)
@@ -174,11 +188,15 @@ public class NewsService {
                     queryParam, time, result.size(), "200", null, "news", begin);
             queryRepository.save(query);
         } else {
-            // 非用户兴趣查询模式：全库查询 + Redis判断时间是否符合条件
+            // 非用户兴趣查询模式：全库筛选 newsId + Redis 判断时间范围
             long begin = System.currentTimeMillis();
             LocalDateTime localDateTime = LocalDateTime.now();
 
-            List<News> all = newsRepository.queryNews(
+
+
+            // ✅ 第一步：只查询符合 topic、length 等筛选条件的 newsId（不查整个 News 实体）
+            // 你需要实现一个类似 findNewsIdsByConditions() 的方法，只查字段而不是对象（优化性能）
+            List<String> allNewsIds = newsRepository.queryNews(
                     topic, minLength, maxLength, minHeadlineLength, maxHeadlineLength
             );
 
@@ -198,21 +216,22 @@ public class NewsService {
                     safeNewsIds
             );
 
-
+            // ✅ 第二步：记录日志
             Query query = new Query(localDateTime, "/api/news/query", queryParam,
-                    "newsId", time, all.size(), "200", null, "news", begin);
+                    "newsId", time, allNewsIds.size(), "200", null, "news", begin);
             queryRepository.save(query);
 
-            for (News news : all) {
-                Map<String, Object> newsContent = dataService.getNewsByIdInSecondDatabase(news.getNewsId());
-                if (newsContent != null && newsContent.get("newsbody") != null) {
-                    news.setNewsbody(newsContent.get("newsbody").toString());
-                }
+            // ✅ 第三步：遍历每个 newsId，检查 Redis 中的发布时间是否符合筛选条件
+            for (String newsId : allNewsIds) {
+                if (result.size() >= 100) break;  // ✅ 加入数量上限控制
 
-                String record = redisTemplate.opsForValue().get("news:time:record:" + news.getNewsId());
+                // 获取 Redis 中记录的发布时间（如：2025-06-10T12:34:56）
+                String record = redisTemplate.opsForValue().get("news:time:record:" + newsId);
+
+                // 如果 Redis 中没有时间，或格式太短，直接通过
                 if (record == null || record.length() < 10) {
-                    newsIds.add(news.getNewsId());
-                    result.add(news);
+                    newsIds.add(newsId);
+                    result.add(new News(newsId));  // 此处只占位，稍后通过 getNews(newsId) 补全
                     continue;
                 }
 
@@ -220,16 +239,18 @@ public class NewsService {
                 try {
                     recordDate = LocalDate.parse(record.substring(0, 10), formatter);
                 } catch (Exception e) {
-                    // 如果日期格式错误，跳过
+                    // 日期格式解析错误，跳过
                     continue;
                 }
 
+                // 判断是否在时间范围内
                 if (start != null && recordDate.isBefore(start)) continue;
                 if (end != null && recordDate.isAfter(end)) continue;
 
-                newsIds.add(news.getNewsId());
-                result.add(news);
+                newsIds.add(newsId);
+                result.add(new News(newsId));  // 只填 newsId
             }
+
         }
 
         for (News news : result) {
@@ -239,6 +260,28 @@ public class NewsService {
         return answer;
     }
 
+    public List<News> queryNewsByConditions(
+            String topic,
+            Integer minLen,
+            Integer maxLen,
+            Integer minHeadlineLen,
+            Integer maxHeadlineLen,
+            List<String> newsIds
+    ) {
+        Specification<News> spec = (root, query, cb) -> {
+            List<Predicate> predicates = new ArrayList<>();
+            if (topic != null) predicates.add(cb.equal(root.get("topic"), topic));
+            if (minLen != null) predicates.add(cb.ge(root.get("length"), minLen));
+            if (maxLen != null) predicates.add(cb.le(root.get("length"), maxLen));
+            if (minHeadlineLen != null) predicates.add(cb.ge(root.get("headlineLength"), minHeadlineLen));
+            if (maxHeadlineLen != null) predicates.add(cb.le(root.get("headlineLength"), maxHeadlineLen));
+            if (newsIds != null && !newsIds.isEmpty()) predicates.add(root.get("newsId").in(newsIds));
+            return cb.and(predicates.toArray(new Predicate[0]));
+        };
+
+        Pageable limit = PageRequest.of(0, 1000);
+        return newsQueryRepository.findAll(spec, limit).getContent();
+    }
 
 
     // 热点新闻排行

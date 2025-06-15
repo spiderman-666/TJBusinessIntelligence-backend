@@ -26,6 +26,13 @@ public class News {
     private LocalDateTime exposure_time;
     @Column(name = "Length")
     private Integer length;
+    @Column(name = "headline_length")
+    private Integer headlineLength;
     @Transient
     private String newsbody;
+    public News(String newsId) {
+        this.newsId = newsId;
+    }
+    public News() {
+    }
 }

@@ -10,14 +10,14 @@ import java.util.List;
 public interface NewsRepository extends JpaRepository<News, String> {
     List<News> findByTopic(String topic);
 
-    @Query("SELECT n FROM News n WHERE " +
+    @Query("SELECT n.newsId FROM News n WHERE " +
             "(:topic IS NULL OR n.topic = :topic) AND " +
             "(:minLen IS NULL OR n.length >= :minLen) AND " +
             "(:maxLen IS NULL OR n.length <= :maxLen) AND " +
-            "(:minHeadlineLen IS NULL OR LENGTH(n.headline) >= :minHeadlineLen) AND " +
-            "(:maxHeadlineLen IS NULL OR LENGTH(n.headline) <= :maxHeadlineLen)"
+            "(:minHeadlineLen IS NULL OR n.headlineLength >= :minHeadlineLen) AND " +
+            "(:maxHeadlineLen IS NULL OR n.headlineLength <= :maxHeadlineLen)"
     )
-    List<News> queryNews(
+    List<String> queryNews(
             @Param("topic") String topic,
             @Param("minLen") Integer minLen,
             @Param("maxLen") Integer maxLen,
@@ -32,8 +32,8 @@ public interface NewsRepository extends JpaRepository<News, String> {
             "(:topic IS NULL OR n.topic = :topic) AND " +
             "(:minLen IS NULL OR n.length >= :minLen) AND " +
             "(:maxLen IS NULL OR n.length <= :maxLen) AND " +
-            "(:minHeadlineLen IS NULL OR LENGTH(n.headline) >= :minHeadlineLen) AND " +
-            "(:maxHeadlineLen IS NULL OR LENGTH(n.headline) <= :maxHeadlineLen) AND " +
+            "(:minHeadlineLen IS NULL OR n.headlineLength >= :minHeadlineLen) AND " +
+            "(:maxHeadlineLen IS NULL OR n.headlineLength <= :maxHeadlineLen) AND " +
             "(:newsIds IS NULL OR n.newsId IN :newsIds)")
     List<News> queryNewsById(
             @Param("topic") String topic,
